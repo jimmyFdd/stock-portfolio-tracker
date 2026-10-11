@@ -11,7 +11,12 @@ import type { User } from "@prisma/client";
 
 /**
  * Return the local User row for the signed-in Clerk user, creating/refreshing
- * it on demand. Returns null when nobody is signed in.
+ * it on demand.
+ *
+ * Returns null only when nobody is signed in. If the database query/upsert
+ * fails, the exact error is logged to the server console and re-thrown — it is
+ * NOT swallowed into a null, so callers can tell "signed out" apart from
+ * "database is down" and handle each appropriately.
  */
 export async function getCurrentDbUser(): Promise<User | null> {
   const { userId } = await auth();
@@ -28,25 +33,31 @@ export async function getCurrentDbUser(): Promise<User | null> {
   const name =
     [clerkUser.firstName, clerkUser.lastName].filter(Boolean).join(" ") || base;
 
-  const username = await resolveUniqueUsername(base, userId);
-
   try {
-    return await prisma.user.upsert({
-      where: { clerkId: userId },
-      update: { email, username, name, imageUrl: clerkUser.imageUrl },
-      create: { clerkId: userId, email, username, name, imageUrl: clerkUser.imageUrl },
-    });
-  } catch (e) {
-    // A concurrent sign-in may have claimed the username between the check and
-    // the write (unique violation P2002). Retry once with a random suffix.
-    if (isUniqueViolation(e, "username")) {
-      const fallback = `${base}-${userId.slice(-4)}`;
-      return prisma.user.upsert({
+    const username = await resolveUniqueUsername(base, userId);
+    try {
+      return await prisma.user.upsert({
         where: { clerkId: userId },
-        update: { email, username: fallback, name, imageUrl: clerkUser.imageUrl },
-        create: { clerkId: userId, email, username: fallback, name, imageUrl: clerkUser.imageUrl },
+        update: { email, username, name, imageUrl: clerkUser.imageUrl },
+        create: { clerkId: userId, email, username, name, imageUrl: clerkUser.imageUrl },
       });
+    } catch (e) {
+      // A concurrent sign-in may have claimed the username between the check and
+      // the write (unique violation P2002). Retry once with a suffixed handle.
+      if (isUniqueViolation(e, "username")) {
+        const fallback = `${base}-${userId.slice(-4)}`;
+        return await prisma.user.upsert({
+          where: { clerkId: userId },
+          update: { email, username: fallback, name, imageUrl: clerkUser.imageUrl },
+          create: { clerkId: userId, email, username: fallback, name, imageUrl: clerkUser.imageUrl },
+        });
+      }
+      throw e;
     }
+  } catch (e) {
+    // Any genuine DB failure (connection refused, auth, timeout, constraint,
+    // etc.) lands here. Log the exact error, then re-throw.
+    logDbError("getCurrentDbUser", { clerkId: userId }, e);
     throw e;
   }
 }
@@ -63,6 +74,32 @@ async function resolveUniqueUsername(base: string, clerkId: string): Promise<str
   }
   // Extremely unlikely fallback: guarantee uniqueness via the Clerk id tail.
   return `${base}-${clerkId.slice(-6)}`;
+}
+
+/**
+ * Log the exact database error to the server console with all the detail Prisma
+ * exposes — error code, driver message, metadata, and the full stack — so
+ * production failures are diagnosable instead of opaque.
+ */
+function logDbError(operation: string, context: Record<string, unknown>, e: unknown): void {
+  const err = e as {
+    name?: string;
+    code?: string; // PrismaClientKnownRequestError, e.g. P1001 (unreachable), P2002
+    errorCode?: string; // PrismaClientInitializationError
+    message?: string;
+    meta?: unknown;
+    clientVersion?: string;
+  };
+  console.error(`[db] ${operation} failed`, {
+    ...context,
+    name: err?.name,
+    code: err?.code ?? err?.errorCode,
+    message: err?.message,
+    meta: err?.meta,
+    clientVersion: err?.clientVersion,
+  });
+  // Emit the raw error too, for the full stack trace.
+  console.error(e);
 }
 
 /** Narrow a Prisma unique-constraint error (P2002) on a given field. */

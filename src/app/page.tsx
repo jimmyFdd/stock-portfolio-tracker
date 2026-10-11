@@ -36,8 +36,28 @@ export default async function Page() {
     );
   }
 
-  // Ensure a local User row exists for the signed-in Clerk user.
-  await getCurrentDbUser();
+  // Ensure a local User row exists for the signed-in Clerk user. If the database
+  // is unreachable, getCurrentDbUser logs the exact error server-side and throws;
+  // show a friendly message here instead of crashing the whole page.
+  try {
+    await getCurrentDbUser();
+  } catch {
+    return (
+      <main className="mx-auto flex min-h-[70vh] max-w-lg flex-col items-center justify-center px-6 text-center">
+        <h1 className="text-2xl font-bold text-white">We couldn&apos;t reach the database</h1>
+        <p className="mt-3 text-slate-400">
+          Your account is fine, but we&apos;re having trouble loading your portfolio right
+          now. Please try again in a moment. The error has been logged for us to look into.
+        </p>
+        <a
+          href="/"
+          className="mt-6 rounded-lg bg-brand px-5 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-brand-hover"
+        >
+          Retry
+        </a>
+      </main>
+    );
+  }
 
   return (
     <PortfolioProvider>
