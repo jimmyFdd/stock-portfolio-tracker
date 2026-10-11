@@ -1,0 +1,48 @@
+// Prisma schema for the multi-user stock tracker.
+// Provider: PostgreSQL (works with Supabase or Neon).
+//
+// `url`       — the connection string the app uses at runtime (POOLED).
+// `directUrl` — the DIRECT (non-pooled) connection used by `prisma db push` /
+//               migrations.
+//
+// `neon link` / `neon deploy` pull these into .env.local as DATABASE_URL
+// (pooled) and DATABASE_URL_UNPOOLED (direct), so we map directUrl to the
+// unpooled var Neon provides.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DATABASE_URL_UNPOOLED")
+}
+
+model User {
+  id        String   @id @default(cuid())
+  clerkId   String   @unique // maps to the Clerk user id
+  email     String?
+  username  String   @unique // display handle, derived from Clerk (collision-safe)
+  name      String // display name
+  imageUrl  String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  positions Position[]
+}
+
+model Position {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  symbol    String
+  shares    Float
+  buyPrice  Float
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // One row per (user, ticker); adding more shares merges via weighted average.
+  @@unique([userId, symbol])
+  @@index([userId])
+}
