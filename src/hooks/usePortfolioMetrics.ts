@@ -2,6 +2,7 @@
 
 import { useMemo } from "react";
 import type { Holding, Quote } from "@/lib/types";
+import { inferCurrency, approxUsdRate } from "@/lib/currency";
 
 export interface PositionMetrics extends Holding {
   currency: string; // native trading currency, e.g. "JPY"
@@ -36,8 +37,10 @@ export function usePortfolioMetrics(
   return useMemo(() => {
     const positions: PositionMetrics[] = holdings.map((h) => {
       const q = quotes[h.symbol];
-      const usdRate = q?.usdRate ?? 1; // native → USD (1 for USD / until a quote lands)
-      const currency = q?.currency ?? "USD";
+      // When a live quote is missing, infer the currency from the ticker suffix
+      // and use an approximate rate so foreign holdings aren't shown 1:1 as USD.
+      const currency = q?.currency ?? inferCurrency(h.symbol);
+      const usdRate = q?.usdRate ?? approxUsdRate(currency); // native → USD
 
       // The buy price is stored in the ticker's native currency, so both it and
       // the live price are converted with the same rate before any math.
