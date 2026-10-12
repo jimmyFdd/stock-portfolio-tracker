@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { NewsArticle } from "@/lib/types";
 import { relativeTime } from "@/lib/format";
+import OwnershipSection from "./OwnershipSection";
 
 type Tab = "micro" | "macro";
 
@@ -119,6 +120,8 @@ export default function NewsFeed({ symbols }: { symbols: string[] }) {
           ? "Company-specific headlines filtered to the tickers you hold."
           : "Market-wide economy, Federal Reserve, and sector trends."}
       </p>
+
+      {tab === "micro" && <OwnershipSection symbols={symbols} />}
 
       {error && <p className="mb-2 text-xs text-loss">{error}</p>}
 

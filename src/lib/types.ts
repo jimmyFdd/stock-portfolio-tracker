@@ -49,3 +49,45 @@ export interface HistoryPoint {
   date: string; // YYYY-MM-DD
   value: number;
 }
+
+// ── Institutional & insider ownership (/api/ownership/[symbol]) ──
+
+/** A single insider (director/executive) transaction. */
+export interface InsiderTxn {
+  name: string;
+  date: string; // transaction date, YYYY-MM-DD
+  code: string; // SEC transaction code (P, S, A, M, G, …)
+  shares: number; // shares transacted (absolute)
+  change: number; // signed change in holdings (+ buy / − sell)
+  price: number; // transaction price per share (0 if unknown)
+  type: "buy" | "sell" | "other";
+}
+
+/** A top institutional holder. */
+export interface TopHolder {
+  name: string;
+  shares: number | null;
+  pctHeld: number | null; // percent of shares outstanding (0–100)
+  change: number | null; // percent change in position (0–100), sign meaningful
+}
+
+/** Aggregated ownership + insider data for one ticker. */
+export interface OwnershipData {
+  symbol: string;
+  institutional: {
+    available: boolean;
+    percentHeld: number | null; // % held by institutions (0–100)
+    insiderPercentHeld: number | null; // % held by insiders (0–100)
+    count: number | null; // number of institutional holders
+    topHolders: TopHolder[];
+    source: "finnhub" | "yahoo" | null;
+  };
+  insiderTransactions: InsiderTxn[];
+  sentiment: {
+    available: boolean;
+    netShares: number; // net insider share change over the window
+    avgMspr: number | null; // avg monthly share-purchase ratio (−100…100)
+    label: "Net Buying" | "Net Selling" | "Neutral";
+    months: { year: number; month: number; change: number; mspr: number }[];
+  };
+}
