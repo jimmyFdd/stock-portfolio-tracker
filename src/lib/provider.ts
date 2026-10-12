@@ -61,6 +61,22 @@ async function getJSON<T>(url: string, revalidate = 10): Promise<T> {
 
 const iso = (d: Date) => d.toISOString().slice(0, 10);
 
+/** Yahoo rate-limits shared IPs; retry a chart() call a couple times on 429. */
+async function yahooChart(sym: string, days: number): Promise<any> {
+  const period1 = new Date();
+  period1.setDate(period1.getDate() - days);
+  let lastErr: unknown;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      return await yahooFinance.chart(sym, { period1, interval: "1d" });
+    } catch (e) {
+      lastErr = e;
+      if (attempt < 2) await new Promise((r) => setTimeout(r, 400 * (attempt + 1)));
+    }
+  }
+  throw lastErr;
+}
+
 // ─────────────────────────── FX (currency → USD) ───────────────────────────
 
 const fxCache = new Map<string, { rate: number; ts: number }>();
@@ -98,15 +114,42 @@ export async function getUsdRate(currency: string): Promise<number> {
   if (hit && now - hit.ts < FX_TTL_MS) return hit.rate;
 
   let rate = hit?.rate ?? FX_FALLBACK[cur] ?? 1;
+
+  // 1. Keyless FX APIs that are reliable from serverless/cloud IPs (unlike
+  //    Yahoo, which rate-limits shared IPs). Each returns native → USD directly.
+  const fxEndpoints = [
+    {
+      url: `https://api.frankfurter.dev/v1/latest?base=${cur}&symbols=USD`,
+      pick: (d: any) => d?.rates?.USD,
+    },
+    {
+      url: `https://open.er-api.com/v6/latest/${cur}`,
+      pick: (d: any) => d?.rates?.USD,
+    },
+  ];
+  for (const ep of fxEndpoints) {
+    try {
+      const res = await fetch(ep.url, { next: { revalidate: 600 } });
+      if (!res.ok) continue;
+      const r = ep.pick(await res.json());
+      if (typeof r === "number" && r > 0) {
+        fxCache.set(cur, { rate: r, ts: now });
+        return r;
+      }
+    } catch {
+      /* try next source */
+    }
+  }
+
+  // 2. Yahoo FX pair as a last network source before the static fallback.
   try {
-    // chart() is far more reliable than the throttled quote() endpoint.
     const period1 = new Date();
     period1.setDate(period1.getDate() - 5);
-    const r: any = await yahooFinance.chart(`${cur}USD=X`, { period1, interval: "1d" });
-    const price = r?.meta?.regularMarketPrice;
+    const y: any = await yahooFinance.chart(`${cur}USD=X`, { period1, interval: "1d" });
+    const price = y?.meta?.regularMarketPrice;
     if (typeof price === "number" && price > 0) rate = price;
   } catch {
-    /* keep last-known rate (or 1) rather than failing the whole quote */
+    /* keep last-known / fallback rate rather than failing the whole quote */
   }
   fxCache.set(cur, { rate, ts: now });
   return rate;
@@ -122,9 +165,7 @@ export async function getUsdRate(currency: string): Promise<number> {
  * endpoint, which Yahoo heavily rate-limits ("Too Many Requests").
  */
 async function getYahooQuote(sym: string): Promise<Quote> {
-  const period1 = new Date();
-  period1.setDate(period1.getDate() - 5);
-  const result: any = await yahooFinance.chart(sym, { period1, interval: "1d" });
+  const result: any = await yahooChart(sym, 5);
   const meta = result?.meta;
   const current = meta?.regularMarketPrice;
   if (meta == null || typeof current !== "number") {
@@ -267,10 +308,8 @@ type CloseSeries = { closes: Map<string, number>; currency: string };
 /** Real daily closes from Yahoo Finance (no API key required). */
 async function getYahooCloses(sym: string, days: number): Promise<CloseSeries> {
   const closes = new Map<string, number>();
-  const period1 = new Date();
-  period1.setDate(period1.getDate() - days);
   // chart() is the supported successor to the deprecated historical() method.
-  const result: any = await yahooFinance.chart(sym, { period1, interval: "1d" });
+  const result: any = await yahooChart(sym, days);
   const currency = (result?.meta?.currency || "USD").toUpperCase();
   for (const row of result?.quotes ?? []) {
     const close = row.close ?? row.adjclose;
