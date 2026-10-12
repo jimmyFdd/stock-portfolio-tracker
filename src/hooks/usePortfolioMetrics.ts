@@ -4,12 +4,16 @@ import { useMemo } from "react";
 import type { Holding, Quote } from "@/lib/types";
 
 export interface PositionMetrics extends Holding {
-  price: number;
-  marketValue: number;
-  costBasis: number;
-  gain: number;
+  currency: string; // native trading currency, e.g. "JPY"
+  usdRate: number; // native → USD multiplier
+  nativePrice: number; // current price in the native currency
+  price: number; // current price in USD
+  avgCostUsd: number; // buy price per share in USD
+  marketValue: number; // USD
+  costBasis: number; // USD
+  gain: number; // USD
   gainPct: number;
-  dayChange: number;
+  dayChange: number; // USD
   dayChangePct: number;
   hasQuote: boolean;
 }
@@ -32,21 +36,35 @@ export function usePortfolioMetrics(
   return useMemo(() => {
     const positions: PositionMetrics[] = holdings.map((h) => {
       const q = quotes[h.symbol];
-      const price = q?.current ?? h.buyPrice; // fall back to cost until a quote lands
+      const usdRate = q?.usdRate ?? 1; // native → USD (1 for USD / until a quote lands)
+      const currency = q?.currency ?? "USD";
+
+      // The buy price is stored in the ticker's native currency, so both it and
+      // the live price are converted with the same rate before any math.
+      const nativePrice = q?.current ?? h.buyPrice; // fall back to cost until a quote lands
+      const price = nativePrice * usdRate; // USD
+      const avgCostUsd = h.buyPrice * usdRate; // USD
+
       const marketValue = price * h.shares;
-      const costBasis = h.buyPrice * h.shares;
+      const costBasis = avgCostUsd * h.shares;
       const gain = marketValue - costBasis;
-      const prevClose = q?.previousClose ?? price;
-      const dayChange = (price - prevClose) * h.shares;
+
+      const prevCloseUsd = (q?.previousClose ?? nativePrice) * usdRate;
+      const dayChange = (price - prevCloseUsd) * h.shares;
+
       return {
         ...h,
+        currency,
+        usdRate,
+        nativePrice,
         price,
+        avgCostUsd,
         marketValue,
         costBasis,
         gain,
         gainPct: costBasis ? (gain / costBasis) * 100 : 0,
         dayChange,
-        dayChangePct: prevClose ? ((price - prevClose) / prevClose) * 100 : 0,
+        dayChangePct: prevCloseUsd ? ((price - prevCloseUsd) / prevCloseUsd) * 100 : 0,
         hasQuote: Boolean(q),
       };
     });

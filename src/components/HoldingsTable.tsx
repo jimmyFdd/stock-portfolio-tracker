@@ -2,7 +2,7 @@
 
 import { usePortfolio } from "./PortfolioProvider";
 import type { PositionMetrics } from "@/hooks/usePortfolioMetrics";
-import { usd, pct, signedUsd } from "@/lib/format";
+import { usd, pct, signedUsd, nativeMoney } from "@/lib/format";
 
 function ChangeCell({ amount, percent }: { amount: string; percent: string }) {
   return (
@@ -54,6 +54,11 @@ export default function HoldingsTable({ positions }: { positions: PositionMetric
                 <td className="px-4 py-3">
                   <div className="flex items-center gap-2 font-semibold text-white">
                     {p.symbol}
+                    {p.currency !== "USD" && (
+                      <span className="rounded bg-brand/15 px-1.5 py-0.5 text-[10px] font-normal text-brand">
+                        {p.currency}
+                      </span>
+                    )}
                     {!p.hasQuote && (
                       <span className="rounded bg-slate-700 px-1.5 py-0.5 text-[10px] font-normal text-slate-300">
                         no quote
@@ -63,9 +68,25 @@ export default function HoldingsTable({ positions }: { positions: PositionMetric
                 </td>
                 <td className="px-4 py-3 text-right tabular-nums text-slate-200">{p.shares}</td>
                 <td className="px-4 py-3 text-right tabular-nums text-slate-200">
-                  {usd(p.buyPrice)}
+                  <div className="flex flex-col items-end">
+                    <span>{usd(p.avgCostUsd)}</span>
+                    {p.currency !== "USD" && (
+                      <span className="text-[11px] text-slate-500">
+                        {nativeMoney(p.buyPrice, p.currency)}
+                      </span>
+                    )}
+                  </div>
                 </td>
-                <td className="px-4 py-3 text-right tabular-nums text-white">{usd(p.price)}</td>
+                <td className="px-4 py-3 text-right tabular-nums text-white">
+                  <div className="flex flex-col items-end">
+                    <span>{usd(p.price)}</span>
+                    {p.currency !== "USD" && (
+                      <span className="text-[11px] text-slate-500">
+                        {nativeMoney(p.nativePrice, p.currency)}
+                      </span>
+                    )}
+                  </div>
+                </td>
                 <td className={`px-4 py-3 text-right tabular-nums ${dayTone}`}>
                   <ChangeCell amount={signedUsd(p.dayChange)} percent={pct(p.dayChangePct)} />
                 </td>

@@ -28,3 +28,8 @@ yarn-error.log*
 next-env.d.ts
 .mcp.json
 .neon
+.vercel
+.env*
+
+# Claude Code local settings
+.claude/settings.local.json

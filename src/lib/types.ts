@@ -18,6 +18,10 @@ export interface Quote {
   low: number;
   open: number;
   previousClose: number;
+  /** Native trading currency of the quote, e.g. "USD", "JPY". */
+  currency: string;
+  /** Multiplier to convert native-currency amounts to USD (1 for USD). */
+  usdRate: number;
 }
 
 /** A news article returned by the company/market news routes. */

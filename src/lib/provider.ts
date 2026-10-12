@@ -61,46 +61,147 @@ async function getJSON<T>(url: string, revalidate = 10): Promise<T> {
 
 const iso = (d: Date) => d.toISOString().slice(0, 10);
 
+// ─────────────────────────── FX (currency → USD) ───────────────────────────
+
+const fxCache = new Map<string, { rate: number; ts: number }>();
+const FX_TTL_MS = 10 * 60 * 1000; // 10 minutes
+
+// Last-resort approximate rates (native → USD), used ONLY when the live fetch
+// fails and nothing is cached yet. Far better than defaulting to 1 (which would
+// render ¥4,300 as $4,300). These are intentionally rough and go stale.
+const FX_FALLBACK: Record<string, number> = {
+  JPY: 0.0067,
+  EUR: 1.08,
+  GBP: 1.27,
+  CHF: 1.12,
+  CAD: 0.73,
+  AUD: 0.66,
+  HKD: 0.128,
+  CNY: 0.14,
+  KRW: 0.00072,
+  INR: 0.012,
+  TWD: 0.031,
+  SGD: 0.74,
+};
+
+/**
+ * Multiplier that converts an amount in `currency` into USD (1 for USD itself).
+ * The rate comes from Yahoo Finance's `${CUR}USD=X` pair (e.g. JPYUSD=X) and is
+ * cached for a few minutes so a portfolio of many ¥ tickers hits Yahoo once.
+ */
+export async function getUsdRate(currency: string): Promise<number> {
+  const cur = (currency || "USD").toUpperCase();
+  if (cur === "USD") return 1;
+
+  const now = Date.now();
+  const hit = fxCache.get(cur);
+  if (hit && now - hit.ts < FX_TTL_MS) return hit.rate;
+
+  let rate = hit?.rate ?? FX_FALLBACK[cur] ?? 1;
+  try {
+    // chart() is far more reliable than the throttled quote() endpoint.
+    const period1 = new Date();
+    period1.setDate(period1.getDate() - 5);
+    const r: any = await yahooFinance.chart(`${cur}USD=X`, { period1, interval: "1d" });
+    const price = r?.meta?.regularMarketPrice;
+    if (typeof price === "number" && price > 0) rate = price;
+  } catch {
+    /* keep last-known rate (or 1) rather than failing the whole quote */
+  }
+  fxCache.set(cur, { rate, ts: now });
+  return rate;
+}
+
 // ─────────────────────────── Quotes ───────────────────────────
+
+/**
+ * Normalized quote from Yahoo Finance. Handles foreign tickers (e.g. 4044.T)
+ * and reports the native trading currency plus a USD conversion rate.
+ *
+ * Reads the live snapshot from chart()'s `meta` rather than the quote()
+ * endpoint, which Yahoo heavily rate-limits ("Too Many Requests").
+ */
+async function getYahooQuote(sym: string): Promise<Quote> {
+  const period1 = new Date();
+  period1.setDate(period1.getDate() - 5);
+  const result: any = await yahooFinance.chart(sym, { period1, interval: "1d" });
+  const meta = result?.meta;
+  const current = meta?.regularMarketPrice;
+  if (meta == null || typeof current !== "number") {
+    throw new ProviderError(`No quote for ${sym}.`, 404);
+  }
+  const currency = (meta.currency || "USD").toUpperCase();
+  const previousClose = meta.chartPreviousClose ?? meta.previousClose ?? current;
+  const usdRate = await getUsdRate(currency);
+  return {
+    symbol: sym,
+    current,
+    change: current - previousClose,
+    percentChange: previousClose ? ((current - previousClose) / previousClose) * 100 : 0,
+    high: meta.regularMarketDayHigh ?? current,
+    low: meta.regularMarketDayLow ?? current,
+    open: meta.regularMarketOpen ?? current,
+    previousClose,
+    currency,
+    usdRate,
+  };
+}
 
 export async function getQuote(symbol: string): Promise<Quote> {
   const sym = symbol.toUpperCase();
 
-  if (PROVIDER === "polygon") {
-    const key = requireKey(POLYGON_KEY, "POLYGON_API_KEY");
-    const data = await getJSON<any>(
-      `${POLYGON}/v2/aggs/ticker/${sym}/prev?adjusted=true&apiKey=${key}`
-    );
-    const r = data?.results?.[0];
-    if (!r) throw new ProviderError(`No quote for ${sym}.`, 404);
-    const current = r.c;
-    const previousClose = r.o; // prev-day open as a rough previous reference
-    return {
-      symbol: sym,
-      current,
-      change: current - previousClose,
-      percentChange: previousClose ? ((current - previousClose) / previousClose) * 100 : 0,
-      high: r.h,
-      low: r.l,
-      open: r.o,
-      previousClose,
-    };
+  // 1. Primary provider for US-listed tickers (quoted in USD).
+  if (PROVIDER === "polygon" && POLYGON_KEY) {
+    try {
+      const data = await getJSON<any>(
+        `${POLYGON}/v2/aggs/ticker/${sym}/prev?adjusted=true&apiKey=${POLYGON_KEY}`
+      );
+      const r = data?.results?.[0];
+      if (r) {
+        const current = r.c;
+        const previousClose = r.o; // prev-day open as a rough previous reference
+        return {
+          symbol: sym,
+          current,
+          change: current - previousClose,
+          percentChange: previousClose ? ((current - previousClose) / previousClose) * 100 : 0,
+          high: r.h,
+          low: r.l,
+          open: r.o,
+          previousClose,
+          currency: "USD",
+          usdRate: 1,
+        };
+      }
+    } catch {
+      /* fall through to Yahoo */
+    }
+  } else if (FINNHUB_KEY) {
+    try {
+      const q = await getJSON<any>(`${FINNHUB}/quote?symbol=${sym}&token=${FINNHUB_KEY}`);
+      // Finnhub returns { c, d, dp, h, l, o, pc }; c === 0 && pc === 0 means no
+      // data (common for non-US tickers like 4044.T) → fall back to Yahoo.
+      if (!(q.c === 0 && q.pc === 0)) {
+        return {
+          symbol: sym,
+          current: q.c,
+          change: q.d,
+          percentChange: q.dp,
+          high: q.h,
+          low: q.l,
+          open: q.o,
+          previousClose: q.pc,
+          currency: "USD",
+          usdRate: 1,
+        };
+      }
+    } catch {
+      /* fall through to Yahoo */
+    }
   }
 
-  const key = requireKey(FINNHUB_KEY, "FINNHUB_API_KEY");
-  const q = await getJSON<any>(`${FINNHUB}/quote?symbol=${sym}&token=${key}`);
-  // Finnhub returns { c, d, dp, h, l, o, pc }; c === 0 means unknown symbol.
-  if (q.c === 0 && q.pc === 0) throw new ProviderError(`No quote for ${sym}.`, 404);
-  return {
-    symbol: sym,
-    current: q.c,
-    change: q.d,
-    percentChange: q.dp,
-    high: q.h,
-    low: q.l,
-    open: q.o,
-    previousClose: q.pc,
-  };
+  // 2. Fallback: Yahoo Finance — covers foreign tickers and reports currency.
+  return getYahooQuote(sym);
 }
 
 // ─────────────────────────── News ───────────────────────────
@@ -160,18 +261,22 @@ export async function searchSymbols(query: string): Promise<SymbolMatch[]> {
 
 // ─────────────────────────── Historical performance ───────────────────────────
 
+/** A per-symbol close series together with its native trading currency. */
+type CloseSeries = { closes: Map<string, number>; currency: string };
+
 /** Real daily closes from Yahoo Finance (no API key required). */
-async function getYahooCloses(sym: string, days: number): Promise<Map<string, number>> {
-  const out = new Map<string, number>();
+async function getYahooCloses(sym: string, days: number): Promise<CloseSeries> {
+  const closes = new Map<string, number>();
   const period1 = new Date();
   period1.setDate(period1.getDate() - days);
   // chart() is the supported successor to the deprecated historical() method.
-  const result = await yahooFinance.chart(sym, { period1, interval: "1d" });
+  const result: any = await yahooFinance.chart(sym, { period1, interval: "1d" });
+  const currency = (result?.meta?.currency || "USD").toUpperCase();
   for (const row of result?.quotes ?? []) {
     const close = row.close ?? row.adjclose;
-    if (row.date && close != null) out.set(iso(new Date(row.date)), Number(close));
+    if (row.date && close != null) closes.set(iso(new Date(row.date)), Number(close));
   }
-  return out;
+  return { closes, currency };
 }
 
 /**
@@ -185,7 +290,7 @@ async function getYahooCloses(sym: string, days: number): Promise<Map<string, nu
  *   4. Synthetic fallback  — deterministic curve anchored on the live quote, so
  *                            the chart still renders even fully offline.
  */
-async function getDailyCloses(symbol: string, days: number): Promise<Map<string, number>> {
+async function getDailyCloses(symbol: string, days: number): Promise<CloseSeries> {
   const sym = symbol.toUpperCase();
   const out = new Map<string, number>();
 
@@ -201,16 +306,17 @@ async function getDailyCloses(symbol: string, days: number): Promise<Map<string,
       for (const r of data?.results ?? []) {
         out.set(iso(new Date(r.t)), r.c);
       }
-      if (out.size) return out;
+      if (out.size) return { closes: out, currency: "USD" };
     } catch {
       /* fall through */
     }
   }
 
-  // Primary real source on free setups: Yahoo Finance (no key).
+  // Primary real source on free setups: Yahoo Finance (no key). Carries the
+  // native currency so foreign series can be converted to USD on aggregation.
   try {
     const yahoo = await getYahooCloses(sym, days);
-    if (yahoo.size) return yahoo;
+    if (yahoo.closes.size) return yahoo;
   } catch {
     /* fall through */
   }
@@ -225,7 +331,7 @@ async function getDailyCloses(symbol: string, days: number): Promise<Map<string,
       );
       if (data?.s === "ok" && Array.isArray(data.t)) {
         data.t.forEach((t: number, i: number) => out.set(iso(new Date(t * 1000)), data.c[i]));
-        if (out.size) return out;
+        if (out.size) return { closes: out, currency: "USD" };
       }
     } catch {
       /* fall through to synthetic */
@@ -233,12 +339,16 @@ async function getDailyCloses(symbol: string, days: number): Promise<Map<string,
   }
 
   // Synthetic fallback: anchor on the live price and walk backwards with a
-  // deterministic drift so the same symbol always yields the same curve.
+  // deterministic drift so the same symbol always yields the same curve. The
+  // anchor stays in the native currency; aggregation converts it to USD.
   let anchor = 100;
+  let currency = "USD";
   try {
-    anchor = (await getQuote(sym)).current || 100;
+    const q = await getQuote(sym);
+    anchor = q.current || 100;
+    currency = q.currency;
   } catch {
-    /* keep default anchor */
+    /* keep defaults */
   }
   let seed = 0;
   for (const ch of sym) seed += ch.charCodeAt(0);
@@ -249,10 +359,13 @@ async function getDailyCloses(symbol: string, days: number): Promise<Map<string,
     const drift = 1 - i * 0.0015; // mild upward trend toward today
     out.set(iso(d), Number((anchor * drift * (1 + wobble)).toFixed(2)));
   }
-  return out;
+  return { closes: out, currency };
 }
 
-/** Aggregate per-symbol close series into a single portfolio value series. */
+/**
+ * Aggregate per-symbol close series into a single portfolio value series, with
+ * every series converted to USD so a mixed-currency portfolio totals correctly.
+ */
 export async function getPortfolioHistory(
   holdings: Pick<Holding, "symbol" | "shares">[],
   days: number
@@ -260,10 +373,11 @@ export async function getPortfolioHistory(
   if (!holdings.length) return [];
 
   const series = await Promise.all(
-    holdings.map(async (h) => ({
-      shares: h.shares,
-      closes: await getDailyCloses(h.symbol, days),
-    }))
+    holdings.map(async (h) => {
+      const { closes, currency } = await getDailyCloses(h.symbol, days);
+      const usdRate = await getUsdRate(currency);
+      return { shares: h.shares, closes, usdRate };
+    })
   );
 
   // Union of all dates across holdings, ascending.
@@ -279,7 +393,7 @@ export async function getPortfolioHistory(
     series.forEach((s, i) => {
       const close = s.closes.get(date);
       if (close != null) last[i] = close;
-      value += last[i] * s.shares;
+      value += last[i] * s.shares * s.usdRate; // native → USD
     });
     points.push({ date, value: Number(value.toFixed(2)) });
   }

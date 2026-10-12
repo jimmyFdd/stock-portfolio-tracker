@@ -7,7 +7,7 @@ import { notFound } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { getQuote, getCompanyNews } from "@/lib/provider";
 import type { NewsArticle, Quote } from "@/lib/types";
-import { usd, pct, signedUsd, relativeTime } from "@/lib/format";
+import { usd, pct, signedUsd, relativeTime, nativeMoney } from "@/lib/format";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -32,20 +32,27 @@ export default async function ProfilePage({ params }: { params: { userId: string
     if (r.status === "fulfilled") quotes[symbols[i]] = r.value;
   });
 
-  // Per-position + total metrics.
+  // Per-position + total metrics, all normalized to USD (foreign tickers like
+  // 4044.T are quoted in their native currency and converted via quote.usdRate).
   const positions = user.positions.map((p) => {
-    const price = quotes[p.symbol]?.current ?? p.buyPrice;
+    const q = quotes[p.symbol];
+    const usdRate = q?.usdRate ?? 1;
+    const currency = q?.currency ?? "USD";
+    const nativePrice = q?.current ?? p.buyPrice;
+    const price = nativePrice * usdRate; // USD
     const marketValue = price * p.shares;
-    const costBasis = p.buyPrice * p.shares;
+    const costBasis = p.buyPrice * usdRate * p.shares;
     const gain = marketValue - costBasis;
     return {
       ...p,
+      currency,
+      nativePrice,
       price,
       marketValue,
       costBasis,
       gain,
       gainPct: costBasis ? (gain / costBasis) * 100 : 0,
-      hasQuote: Boolean(quotes[p.symbol]),
+      hasQuote: Boolean(q),
     };
   });
   const totalValue = positions.reduce((s, p) => s + p.marketValue, 0);
@@ -124,9 +131,27 @@ export default async function ProfilePage({ params }: { params: { userId: string
             <tbody>
               {positions.map((p) => (
                 <tr key={p.id} className="border-b border-surface-border/60 last:border-0">
-                  <td className="px-4 py-3 font-semibold text-white">{p.symbol}</td>
+                  <td className="px-4 py-3 font-semibold text-white">
+                    <span className="flex items-center gap-2">
+                      {p.symbol}
+                      {p.currency !== "USD" && (
+                        <span className="rounded bg-brand/15 px-1.5 py-0.5 text-[10px] font-normal text-brand">
+                          {p.currency}
+                        </span>
+                      )}
+                    </span>
+                  </td>
                   <td className="px-4 py-3 text-right tabular-nums text-slate-200">{p.shares}</td>
-                  <td className="px-4 py-3 text-right tabular-nums text-white">{usd(p.price)}</td>
+                  <td className="px-4 py-3 text-right tabular-nums text-white">
+                    <div className="flex flex-col items-end">
+                      <span>{usd(p.price)}</span>
+                      {p.currency !== "USD" && (
+                        <span className="text-[11px] text-slate-500">
+                          {nativeMoney(p.nativePrice, p.currency)}
+                        </span>
+                      )}
+                    </div>
+                  </td>
                   <td className="px-4 py-3 text-right tabular-nums text-white">
                     {usd(p.marketValue)}
                   </td>
