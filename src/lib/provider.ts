@@ -25,9 +25,38 @@ try {
 const PROVIDER = (process.env.PRICE_PROVIDER ?? "finnhub").toLowerCase();
 const FINNHUB_KEY = process.env.FINNHUB_API_KEY;
 const POLYGON_KEY = process.env.POLYGON_API_KEY;
+const TWELVEDATA_KEY = process.env.TWELVEDATA_API_KEY;
 
 const FINNHUB = "https://finnhub.io/api/v1";
 const POLYGON = "https://api.polygon.io";
+const TWELVEDATA = "https://api.twelvedata.com";
+
+// Map a Yahoo-style exchange suffix to the exchange name Twelve Data expects.
+// Twelve Data uses `symbol=4044&exchange=JPX` rather than `4044.T`.
+const SUFFIX_EXCHANGE: Record<string, string> = {
+  T: "JPX", // Tokyo
+  HK: "HKEX", // Hong Kong
+  L: "LSE", // London
+  SS: "SSE", // Shanghai
+  SZ: "SZSE", // Shenzhen
+  KS: "KRX", // Korea
+  KQ: "KRX",
+  TW: "TWSE", // Taiwan
+  AX: "ASX", // Australia
+  NS: "NSE", // India
+  BO: "BSE",
+  SI: "SGX", // Singapore
+  TO: "TSX", // Toronto
+  V: "TSXV",
+};
+
+/** Split "4044.T" into { base: "4044", exchange: "JPX" } for Twelve Data. */
+function splitExchange(sym: string): { base: string; exchange: string } {
+  const i = sym.lastIndexOf(".");
+  if (i === -1) return { base: sym, exchange: "" };
+  const exchange = SUFFIX_EXCHANGE[sym.slice(i + 1).toUpperCase()];
+  return exchange ? { base: sym.slice(0, i), exchange } : { base: sym, exchange: "" };
+}
 
 class ProviderError extends Error {
   status: number;
@@ -158,6 +187,43 @@ export async function getUsdRate(currency: string): Promise<number> {
 // ─────────────────────────── Quotes ───────────────────────────
 
 /**
+ * Normalized quote from Twelve Data — reliable for international tickers from
+ * cloud IPs (where Yahoo throttles foreign exchanges). Reports native currency.
+ * Note: the free plan covers US + FX; many foreign exchanges need a paid plan.
+ */
+async function getTwelveQuote(sym: string): Promise<Quote> {
+  if (!TWELVEDATA_KEY) throw new ProviderError("TWELVEDATA_API_KEY not set.", 500);
+  const { base, exchange } = splitExchange(sym);
+  const params = new URLSearchParams({ symbol: base, apikey: TWELVEDATA_KEY });
+  if (exchange) params.set("exchange", exchange);
+
+  const d = await getJSON<any>(`${TWELVEDATA}/quote?${params.toString()}`, 10);
+  // Twelve Data returns HTTP 200 with { status:"error", code, message } on
+  // bad/plan-restricted symbols, so check the body rather than the status code.
+  if (d?.status === "error" || d?.code) {
+    throw new ProviderError(d?.message || `No quote for ${sym}.`, 404);
+  }
+  const current = Number(d.close);
+  if (!Number.isFinite(current)) throw new ProviderError(`No quote for ${sym}.`, 404);
+
+  const currency = (d.currency || "USD").toUpperCase();
+  const previousClose = Number(d.previous_close) || current;
+  const usdRate = await getUsdRate(currency);
+  return {
+    symbol: sym,
+    current,
+    change: current - previousClose,
+    percentChange: previousClose ? ((current - previousClose) / previousClose) * 100 : 0,
+    high: Number(d.high) || current,
+    low: Number(d.low) || current,
+    open: Number(d.open) || current,
+    previousClose,
+    currency,
+    usdRate,
+  };
+}
+
+/**
  * Normalized quote from Yahoo Finance. Handles foreign tickers (e.g. 4044.T)
  * and reports the native trading currency plus a USD conversion rate.
  *
@@ -241,7 +307,18 @@ export async function getQuote(symbol: string): Promise<Quote> {
     }
   }
 
-  // 2. Fallback: Yahoo Finance — covers foreign tickers and reports currency.
+  // 2. Twelve Data — reliable for international tickers from cloud IPs (Yahoo
+  //    throttles foreign exchanges from datacenters). Skipped if no key.
+  if (TWELVEDATA_KEY) {
+    try {
+      return await getTwelveQuote(sym);
+    } catch {
+      /* fall through to Yahoo (e.g. plan-restricted symbol) */
+    }
+  }
+
+  // 3. Fallback: Yahoo Finance — covers foreign tickers (works from residential
+  //    IPs; foreign exchanges may be throttled from the cloud).
   return getYahooQuote(sym);
 }
 
@@ -318,6 +395,31 @@ async function getYahooCloses(sym: string, days: number): Promise<CloseSeries> {
   return { closes, currency };
 }
 
+/** Daily closes from Twelve Data (reliable for foreign tickers from the cloud). */
+async function getTwelveCloses(sym: string, days: number): Promise<CloseSeries> {
+  if (!TWELVEDATA_KEY) throw new ProviderError("TWELVEDATA_API_KEY not set.", 500);
+  const { base, exchange } = splitExchange(sym);
+  const params = new URLSearchParams({
+    symbol: base,
+    interval: "1day",
+    outputsize: String(Math.min(days + 5, 5000)),
+    apikey: TWELVEDATA_KEY,
+  });
+  if (exchange) params.set("exchange", exchange);
+
+  const d = await getJSON<any>(`${TWELVEDATA}/time_series?${params.toString()}`, 3600);
+  if (d?.status === "error" || !Array.isArray(d?.values)) {
+    throw new ProviderError(d?.message || `No history for ${sym}.`, 404);
+  }
+  const currency = (d?.meta?.currency || "USD").toUpperCase();
+  const closes = new Map<string, number>();
+  for (const row of d.values) {
+    const c = Number(row.close);
+    if (row.datetime && Number.isFinite(c)) closes.set(String(row.datetime).slice(0, 10), c);
+  }
+  return { closes, currency };
+}
+
 /**
  * Fetch a daily close series for one symbol over `days`.
  *
@@ -346,6 +448,17 @@ async function getDailyCloses(symbol: string, days: number): Promise<CloseSeries
         out.set(iso(new Date(r.t)), r.c);
       }
       if (out.size) return { closes: out, currency: "USD" };
+    } catch {
+      /* fall through */
+    }
+  }
+
+  // For foreign tickers, prefer Twelve Data (Yahoo throttles foreign exchanges
+  // from cloud IPs). US tickers skip this to conserve the Twelve Data quota.
+  if (TWELVEDATA_KEY && splitExchange(sym).exchange) {
+    try {
+      const td = await getTwelveCloses(sym, days);
+      if (td.closes.size) return td;
     } catch {
       /* fall through */
     }
