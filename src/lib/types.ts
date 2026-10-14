@@ -52,6 +52,23 @@ export interface HistoryPoint {
   value: number;
 }
 
+// ── AI daily stock analysis (/api/analysis/[symbol]) ──
+
+export type AnalysisDriver = "Macro" | "Micro" | "Both";
+export type AnalysisTrajectory = "Transitory Noise" | "Structural Shift";
+
+/** AI-generated daily movement diagnosis for one ticker. */
+export interface DailyAnalysis {
+  symbol: string;
+  date: string; // YYYY-MM-DD (UTC)
+  driver: AnalysisDriver;
+  summary: string;
+  trajectoryType: AnalysisTrajectory;
+  longTermOutlook: string;
+  priceChangePct: number | null; // the move being diagnosed
+  cached: boolean; // true if served from the DB cache (no new tokens spent)
+}
+
 // ── Institutional & insider ownership (/api/ownership/[symbol]) ──
 
 /** A single insider (director/executive) transaction. */

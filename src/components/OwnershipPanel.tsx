@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import type { OwnershipData } from "@/lib/types";
 import { usd } from "@/lib/format";
+import AnalysisCard from "./AnalysisCard";
 
 const compactNum = (n: number) =>
   new Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 1 }).format(
@@ -38,10 +39,19 @@ export default function OwnershipPanel({ symbol }: { symbol: string }) {
     return () => ctrl.abort();
   }, [symbol]);
 
-  if (loading) return <p className="px-4 py-5 text-sm text-slate-500">Loading ownership data…</p>;
-  if (error) return <p className="px-4 py-5 text-sm text-loss">{error}</p>;
-  if (!data) return null;
+  return (
+    <div className="flex flex-col gap-4 px-4 py-4">
+      {/* AI movement diagnosis — renders independently of the ownership fetch */}
+      <AnalysisCard symbol={symbol} />
 
+      {loading && <p className="text-sm text-slate-500">Loading ownership data…</p>}
+      {error && <p className="text-xs text-loss">{error}</p>}
+      {data && <OwnershipBody data={data} />}
+    </div>
+  );
+}
+
+function OwnershipBody({ data }: { data: OwnershipData }) {
   const { institutional: inst, insiderTransactions: txns, sentiment: s } = data;
 
   const sentTone =
@@ -52,7 +62,7 @@ export default function OwnershipPanel({ symbol }: { symbol: string }) {
         : "border-surface-border bg-surface text-slate-300";
 
   return (
-    <div className="flex flex-col gap-4 px-4 py-4">
+    <>
       {/* Summary: insider sentiment */}
       <div className={`rounded-lg border px-3 py-2.5 ${sentTone}`}>
         <div className="flex items-center justify-between">
@@ -186,6 +196,6 @@ export default function OwnershipPanel({ symbol }: { symbol: string }) {
           </ul>
         )}
       </div>
-    </div>
+    </>
   );
 }

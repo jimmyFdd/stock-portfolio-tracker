@@ -12,6 +12,7 @@
     "db:studio": "dotenv -e .env.local -- prisma studio"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.134.0",
     "@clerk/nextjs": "^6.9.6",
     "@neon/config": "^1.8.6",
     "@neon/env": "^1.5.3",

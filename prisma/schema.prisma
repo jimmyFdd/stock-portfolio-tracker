@@ -32,6 +32,20 @@ model User {
   positions Position[]
 }
 
+model DailyAnalysis {
+  id              String   @id @default(cuid())
+  symbol          String
+  date            String // YYYY-MM-DD (UTC) — one analysis per ticker per day
+  driver          String // 'Macro' | 'Micro' | 'Both'
+  summary         String
+  longTermOutlook String
+  trajectoryType  String // 'Transitory Noise' | 'Structural Shift'
+  updatedAt       DateTime @updatedAt
+
+  // Generate (and pay for) an analysis only once per ticker per day.
+  @@unique([symbol, date])
+}
+
 model Position {
   id        String   @id @default(cuid())
   userId    String
