@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { usePortfolio } from "./PortfolioProvider";
 import type { PositionMetrics } from "@/hooks/usePortfolioMetrics";
 import { usd, pct, signedUsd, nativeMoney } from "@/lib/format";
@@ -10,6 +11,101 @@ function ChangeCell({ amount, percent }: { amount: string; percent: string }) {
       <span>{amount}</span>
       <span className="text-xs opacity-80">{percent}</span>
     </div>
+  );
+}
+
+/**
+ * Interactive price cell. Click the price (or the pencil) to enter a manual
+ * price in the ticker's native currency; a "Manual" badge marks overrides and
+ * ↺ reverts to live quotes.
+ */
+function PriceCell({ p }: { p: PositionMetrics }) {
+  const { updateHolding } = usePortfolio();
+  const [editing, setEditing] = useState(false);
+  const [val, setVal] = useState("");
+
+  const startEdit = () => {
+    setVal(String(p.manualPrice ?? p.nativePrice ?? ""));
+    setEditing(true);
+  };
+  const save = () => {
+    const n = Number(val);
+    if (Number.isFinite(n) && n > 0) updateHolding(p.id, { manualPrice: n });
+    setEditing(false);
+  };
+  const reset = () => {
+    updateHolding(p.id, { manualPrice: null });
+    setEditing(false);
+  };
+
+  if (editing) {
+    return (
+      <div className="flex items-center justify-end gap-1">
+        {p.currency !== "USD" && (
+          <span className="text-[11px] text-slate-500" title="Enter the price in the native currency">
+            {p.currency}
+          </span>
+        )}
+        <input
+          autoFocus
+          type="number"
+          min="0"
+          step="any"
+          value={val}
+          onChange={(e) => setVal(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") save();
+            if (e.key === "Escape") setEditing(false);
+          }}
+          className="w-24 rounded border border-surface-border bg-surface px-2 py-1 text-right text-sm text-white outline-none focus:border-brand"
+        />
+        <button
+          onClick={save}
+          aria-label="Save manual price"
+          className="rounded px-1.5 py-1 text-gain hover:bg-gain/10"
+        >
+          ✓
+        </button>
+        <button
+          onClick={() => setEditing(false)}
+          aria-label="Cancel"
+          className="rounded px-1.5 py-1 text-slate-400 hover:bg-surface"
+        >
+          ✕
+        </button>
+        {p.isManual && (
+          <button
+            onClick={reset}
+            title="Reset to live quotes"
+            aria-label="Reset to live quotes"
+            className="rounded px-1.5 py-1 text-slate-400 hover:bg-surface"
+          >
+            ↺
+          </button>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <button
+      onClick={startEdit}
+      title="Click to set a manual price"
+      className="group ml-auto flex flex-col items-end"
+    >
+      <span className="flex items-center gap-1.5 text-white">
+        {usd(p.price)}
+        {p.isManual && (
+          <span className="rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-normal text-amber-400">
+            Manual
+          </span>
+        )}
+        <span className="text-slate-500 opacity-0 transition-opacity group-hover:opacity-100">✎</span>
+      </span>
+      {p.currency !== "USD" && (
+        <span className="text-[11px] text-slate-500">{nativeMoney(p.nativePrice, p.currency)}</span>
+      )}
+    </button>
   );
 }
 
@@ -59,7 +155,7 @@ export default function HoldingsTable({ positions }: { positions: PositionMetric
                         {p.currency}
                       </span>
                     )}
-                    {!p.hasQuote && (
+                    {!p.hasQuote && !p.isManual && (
                       <span className="rounded bg-slate-700 px-1.5 py-0.5 text-[10px] font-normal text-slate-300">
                         no quote
                       </span>
@@ -78,14 +174,7 @@ export default function HoldingsTable({ positions }: { positions: PositionMetric
                   </div>
                 </td>
                 <td className="px-4 py-3 text-right tabular-nums text-white">
-                  <div className="flex flex-col items-end">
-                    <span>{usd(p.price)}</span>
-                    {p.currency !== "USD" && (
-                      <span className="text-[11px] text-slate-500">
-                        {nativeMoney(p.nativePrice, p.currency)}
-                      </span>
-                    )}
-                  </div>
+                  <PriceCell p={p} />
                 </td>
                 <td className={`px-4 py-3 text-right tabular-nums ${dayTone}`}>
                   <ChangeCell amount={signedUsd(p.dayChange)} percent={pct(p.dayChangePct)} />

@@ -6,6 +6,8 @@ export interface Holding {
   symbol: string;
   shares: number;
   buyPrice: number;
+  /** Manual price override in the ticker's native currency (null/undefined = live quotes). */
+  manualPrice?: number | null;
 }
 
 /** Normalized real-time quote returned by /api/quote. */

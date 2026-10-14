@@ -11,8 +11,15 @@ function serialize(p: {
   symbol: string;
   shares: number;
   buyPrice: number;
+  manualPrice: number | null;
 }) {
-  return { id: p.id, symbol: p.symbol, shares: p.shares, buyPrice: p.buyPrice };
+  return {
+    id: p.id,
+    symbol: p.symbol,
+    shares: p.shares,
+    buyPrice: p.buyPrice,
+    manualPrice: p.manualPrice,
+  };
 }
 
 async function listFor(userId: string) {

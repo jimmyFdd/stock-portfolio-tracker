@@ -7,8 +7,9 @@ import { inferCurrency, approxUsdRate } from "@/lib/currency";
 export interface PositionMetrics extends Holding {
   currency: string; // native trading currency, e.g. "JPY"
   usdRate: number; // native → USD multiplier
-  nativePrice: number; // current price in the native currency
-  price: number; // current price in USD
+  nativePrice: number; // effective price in the native currency (manual or live)
+  price: number; // effective price in USD
+  isManual: boolean; // true when a manual price override is in effect
   avgCostUsd: number; // buy price per share in USD
   marketValue: number; // USD
   costBasis: number; // USD
@@ -42,9 +43,11 @@ export function usePortfolioMetrics(
       const currency = q?.currency ?? inferCurrency(h.symbol);
       const usdRate = q?.usdRate ?? approxUsdRate(currency); // native → USD
 
-      // The buy price is stored in the ticker's native currency, so both it and
-      // the live price are converted with the same rate before any math.
-      const nativePrice = q?.current ?? h.buyPrice; // fall back to cost until a quote lands
+      // A manual override (stored in native currency) wins over the live quote;
+      // it's the effective price for all downstream math. Both it and the buy
+      // price are converted with the same FX rate.
+      const isManual = h.manualPrice != null;
+      const nativePrice = h.manualPrice ?? q?.current ?? h.buyPrice;
       const price = nativePrice * usdRate; // USD
       const avgCostUsd = h.buyPrice * usdRate; // USD
 
@@ -52,6 +55,8 @@ export function usePortfolioMetrics(
       const costBasis = avgCostUsd * h.shares;
       const gain = marketValue - costBasis;
 
+      // Today's change uses the live previous close; with a manual price and no
+      // live quote there's no reference, so it naturally resolves to zero.
       const prevCloseUsd = (q?.previousClose ?? nativePrice) * usdRate;
       const dayChange = (price - prevCloseUsd) * h.shares;
 
@@ -61,6 +66,7 @@ export function usePortfolioMetrics(
         usdRate,
         nativePrice,
         price,
+        isManual,
         avgCostUsd,
         marketValue,
         costBasis,

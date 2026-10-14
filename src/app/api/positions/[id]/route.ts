@@ -15,6 +15,7 @@ async function listFor(userId: string) {
     symbol: p.symbol,
     shares: p.shares,
     buyPrice: p.buyPrice,
+    manualPrice: p.manualPrice,
   }));
 }
 
@@ -57,7 +58,7 @@ export async function PATCH(
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
 
-  const data: { shares?: number; buyPrice?: number } = {};
+  const data: { shares?: number; buyPrice?: number; manualPrice?: number | null } = {};
   if (body?.shares !== undefined) {
     const shares = Number(body.shares);
     if (!Number.isFinite(shares) || shares <= 0)
@@ -69,6 +70,18 @@ export async function PATCH(
     if (!Number.isFinite(buyPrice) || buyPrice < 0)
       return NextResponse.json({ error: "Buy price must be >= 0" }, { status: 400 });
     data.buyPrice = buyPrice;
+  }
+  // manualPrice: a positive number sets the override; explicit null clears it
+  // (reverting to live quotes).
+  if (body?.manualPrice !== undefined) {
+    if (body.manualPrice === null) {
+      data.manualPrice = null;
+    } else {
+      const mp = Number(body.manualPrice);
+      if (!Number.isFinite(mp) || mp <= 0)
+        return NextResponse.json({ error: "Manual price must be positive" }, { status: 400 });
+      data.manualPrice = mp;
+    }
   }
 
   await prisma.position.update({ where: { id: pos.id }, data });

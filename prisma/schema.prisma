@@ -39,6 +39,10 @@ model Position {
   symbol    String
   shares    Float
   buyPrice  Float
+  // Optional manual price override (in the ticker's native currency), used when
+  // live quotes are unavailable (e.g. foreign tickers like 4044.T). Null = use
+  // live quotes.
+  manualPrice Float?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
