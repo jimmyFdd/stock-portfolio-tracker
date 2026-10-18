@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import type { OwnershipData } from "@/lib/types";
 import { usd } from "@/lib/format";
 import AnalysisCard from "./AnalysisCard";
+import ChipAnalysisPanel from "./ChipDistribution/ChipAnalysisPanel";
 
 const compactNum = (n: number) =>
   new Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 1 }).format(
@@ -23,6 +24,7 @@ export default function OwnershipPanel({ symbol }: { symbol: string }) {
   const [data, setData] = useState<OwnershipData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [tab, setTab] = useState<"overview" | "chip">("overview");
 
   useEffect(() => {
     const ctrl = new AbortController();
@@ -39,14 +41,35 @@ export default function OwnershipPanel({ symbol }: { symbol: string }) {
     return () => ctrl.abort();
   }, [symbol]);
 
+  const tabBtn = (id: "overview" | "chip", label: string) => (
+    <button
+      onClick={() => setTab(id)}
+      className={`rounded-lg px-2.5 py-1 text-xs font-medium transition-colors ${
+        tab === id ? "bg-brand text-white" : "text-slate-400 hover:text-white"
+      }`}
+    >
+      {label}
+    </button>
+  );
+
   return (
     <div className="flex flex-col gap-4 px-4 py-4">
-      {/* AI movement diagnosis — renders independently of the ownership fetch */}
-      <AnalysisCard symbol={symbol} />
+      <div className="flex gap-1">
+        {tabBtn("overview", "Overview")}
+        {tabBtn("chip", "Chip Analysis (籌碼分佈)")}
+      </div>
 
-      {loading && <p className="text-sm text-slate-500">Loading ownership data…</p>}
-      {error && <p className="text-xs text-loss">{error}</p>}
-      {data && <OwnershipBody data={data} />}
+      {tab === "overview" ? (
+        <>
+          {/* AI movement diagnosis — renders independently of the ownership fetch */}
+          <AnalysisCard symbol={symbol} />
+          {loading && <p className="text-sm text-slate-500">Loading ownership data…</p>}
+          {error && <p className="text-xs text-loss">{error}</p>}
+          {data && <OwnershipBody data={data} />}
+        </>
+      ) : (
+        <ChipAnalysisPanel symbol={symbol} />
+      )}
     </div>
   );
 }

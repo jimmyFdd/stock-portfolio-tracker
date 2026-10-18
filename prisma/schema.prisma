@@ -32,6 +32,24 @@ model User {
   positions Position[]
 }
 
+model ChipDistributionSnapshot {
+  id                   String   @id @default(cuid())
+  symbol               String
+  market               String // 'US' | 'JP' | 'TW'
+  reportDate           DateTime
+  bigHolderPct         Float // % held by institutions / >5% / big tier
+  retailHolderPct      Float // % held by retail / small tier
+  insiderNetShares     Float // net insider buy(+)/sell(-) shares
+  marginRatio          Float? // 信用倍率 or short interest %
+  institutionalNetFlow Float? // 法人買賣超 or ETF net flow
+  rawTierData          Json? // full bracket breakdown + AI interpretation
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  @@unique([symbol, reportDate])
+  @@index([symbol])
+}
+
 model DailyAnalysis {
   id              String   @id @default(cuid())
   symbol          String

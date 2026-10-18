@@ -54,6 +54,41 @@ export interface HistoryPoint {
 
 // ── AI daily stock analysis (/api/analysis/[symbol]) ──
 
+// ── Chip distribution / smart-money flow (/api/chip-distribution/[symbol]) ──
+
+export type ChipMarket = "US" | "JP" | "TW";
+
+/** One share-ownership bracket (e.g. a TDCC tier, or institutions vs retail). */
+export interface ChipTier {
+  label: string;
+  pct: number; // percent of shares (0–100)
+  group: "big" | "retail"; // smart money vs retail/speculators
+}
+
+/** One historical point for the accumulation-trend chart. */
+export interface ChipHistoryPoint {
+  date: string; // YYYY-MM-DD
+  bigHolderPct: number;
+}
+
+/** Aggregated chip-distribution data for one ticker. */
+export interface ChipDistribution {
+  symbol: string;
+  market: ChipMarket;
+  available: boolean;
+  reportDate: string | null; // YYYY-MM-DD
+  bigHolderPct: number | null;
+  retailHolderPct: number | null;
+  insiderNetShares: number | null;
+  marginRatio: number | null; // short interest % (US/JP) or 信用倍率 (TW)
+  institutionalNetFlow: number | null;
+  tiers: ChipTier[];
+  history: ChipHistoryPoint[];
+  ai: { stance: "Accumulating" | "Holding" | "Distributing"; interpretation: string } | null;
+  notes: string[]; // which sources are unavailable and why
+  sources: string[]; // which sources were actually used
+}
+
 export type AnalysisDriver = "Macro" | "Micro" | "Both";
 export type AnalysisTrajectory = "Transitory Noise" | "Structural Shift";
 
